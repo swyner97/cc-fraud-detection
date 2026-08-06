@@ -217,4 +217,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 data/fraudTrain.csv
+data/processed/cleaned_transactions.csv
 notes.md

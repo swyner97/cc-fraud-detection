@@ -11,20 +11,27 @@ def customer_id(df):
     df["customer_id"] = df.groupby(["first", "last", "zip", "dob", "cc_num"]).ngroup()
     return df
 
+
 def customer_age(df):
     df = df.copy()
     df["age"] = (pd.Timestamp.now().year) - pd.to_datetime(df["dob"]).dt.year
     return df
 
+
 def high_value_transaction(df):
+    """Flag transactions above the 95th percentile of amt (global threshold)."""
     df = df.copy()
-    df["percentile_95"] = np.percentile(df["amt"], 95)
+    threshold = np.percentile(df["amt"], 95)
+    df["high_value_transaction"] = (df["amt"] > threshold).astype(int)
     return df
+
 
 def night_transaction(df):
     df = df.copy()
-    df['trans_date_trans_time'] = pd.to_datetime(df['trans_date_trans_time'])
-    df['night_trans'] = (df['trans_date_trans_time'].dt.hour >= 22) | (df['trans_date_trans_time'].dt.hour < 6)
+    df["trans_date_trans_time"] = pd.to_datetime(df["trans_date_trans_time"])
+    df["night_trans"] = (df["trans_date_trans_time"].dt.hour >= 22) | (
+        df["trans_date_trans_time"].dt.hour < 6
+    )
     return df
 
 
@@ -34,19 +41,23 @@ def amount_log_transformed(df):
     df["amt_log"] = np.log1p(df["amt"])
     return df
 
+
 def amount_normalized(df):
-    """Standardizes transaction amount using StandardScaler"""
+    """Standardizes transaction amount using StandardScaler.
+
+    NOT called in engineer_features(). Fits on the full column, which is a
+    leakage risk (fit train-only if you add this to the pipeline).
+    """
 
     df = df.copy()
     scaler = StandardScaler()
 
-    df['amount_normalized'] = scaler.fit_transform(df[['amt']])
+    df["amount_normalized"] = scaler.fit_transform(df[["amt"]])
     return df
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """Calculate distance between two coordinates in miles."""
-    df = df.copy()
     R = 3959  # Earth's radius in miles
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
@@ -126,13 +137,9 @@ def transaction_velocity_features(df):
     ).dt.total_seconds() / 60
 
     # First transaction has no previous transaction
-    df["is_first_transaction"] = (
-    df["time_since_last_transaction"].isna().astype(int)
-)
+    df["is_first_transaction"] = df["time_since_last_transaction"].isna().astype(int)
 
-    df["time_since_last_transaction"] = (
-        df["time_since_last_transaction"].fillna(0)
-)
+    df["time_since_last_transaction"] = df["time_since_last_transaction"].fillna(0)
     df["log_time_since_last_transaction"] = np.log1p(df["time_since_last_transaction"])
 
     # count previous transactions in rolling windows
@@ -180,7 +187,7 @@ def transaction_velocity_features(df):
 def unusual_amt(df):
     """Calculate z-score for transaction amount relative to cardholder history."""
     df = df.copy()
-    
+
     df = df.sort_values(["cc_num", "trans_date_trans_time"])
 
     grouped = df.groupby("cc_num")["amt"]
@@ -189,14 +196,9 @@ def unusual_amt(df):
         lambda x: x.shift(1).expanding().mean()
     )
 
-    df["historical_std_amt"] = grouped.transform(
-        lambda x: x.shift(1).expanding().std()
-    )
+    df["historical_std_amt"] = grouped.transform(lambda x: x.shift(1).expanding().std())
 
-    df["z_score"] = (
-        (df["amt"] - df["historical_mean_amt"])
-        / df["historical_std_amt"]
-    )
+    df["z_score"] = (df["amt"] - df["historical_mean_amt"]) / df["historical_std_amt"]
 
     df["z_score"] = df["z_score"].replace([np.inf, -np.inf], np.nan).fillna(0)
     return df
@@ -205,7 +207,7 @@ def unusual_amt(df):
 def transaction_hour(df):
     """Extract hour from transaction timestamp."""
     df = df.copy()
-    
+
     df["trans_date_trans_time"] = pd.to_datetime(df["trans_date_trans_time"])
     df["hour"] = df["trans_date_trans_time"].dt.hour
     return df
@@ -214,7 +216,7 @@ def transaction_hour(df):
 def transaction_day(df):
     """Extract day of week from transaction timestamp."""
     df = df.copy()
-    
+
     df["trans_date_trans_time"] = pd.to_datetime(df["trans_date_trans_time"])
     df["day_string"] = df["trans_date_trans_time"].dt.day_name()
     return df
@@ -223,7 +225,7 @@ def transaction_day(df):
 def is_weekend(df):
     """Flag weekend transactions."""
     df = df.copy()
-    
+
     df["is_weekend"] = df["day_string"].isin(["Saturday", "Sunday"]).astype(int)
     return df
 
@@ -231,7 +233,7 @@ def is_weekend(df):
 def transaction_month(df):
     """Extract month name from transaction timestamp."""
     df = df.copy()
-    
+
     df["transaction_month"] = df["trans_date_trans_time"].dt.month_name()
     return df
 
@@ -240,6 +242,10 @@ def highest_fraud_states(df):
     """
     Calculate the fraud rate for each state and create a feature that flags
     transactions from high-fraud states.
+
+    NOT called in engineer_features(). This uses is_fraud (the target) to
+    build the feature, which is target leakage -- only safe if refactored
+    to fit state rates on train data only and map onto test data.
 
     Args:
         df: DataFrame with columns ['state', 'is_fraud']
@@ -250,7 +256,6 @@ def highest_fraud_states(df):
         high_fraud_states_list: List of high-fraud states
     """
     df = df.copy()
-    
 
     # calculate fraud rate by state
     state_fraud_stats = (
@@ -309,6 +314,7 @@ def engineer_features(df):
     df = customer_id(df)
 
     # Apply all feature engineering functions
+    df = customer_age(df)
     df = calc_distance(df)
     df = transaction_amt_percentile(df)
     df = transaction_velocity_features(df)
@@ -317,5 +323,8 @@ def engineer_features(df):
     df = transaction_day(df)
     df = is_weekend(df)
     df = transaction_month(df)
+    df = night_transaction(df)
+    df = amount_log_transformed(df)
+    df = high_value_transaction(df)
 
     return df
